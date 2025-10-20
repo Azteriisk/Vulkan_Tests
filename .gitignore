@@ -1,0 +1,8 @@
+# Build artifacts
+/build/
+/build
+
+# Visual Studio Code settings
+/.vscode/
+
+imgui.ini

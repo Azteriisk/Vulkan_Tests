@@ -78,31 +78,75 @@ if ! command -v glslc >/dev/null 2>&1; then
 fi
 ensure_command glslc "glslc is part of the Vulkan SDK tools."
 
+export VK_LOADER_DISABLE_IMPLICIT_LAYERS=1
+layer_candidates=(
+    "$VULKAN_SDK/Bin"
+    "$VULKAN_SDK/bin"
+    "$VULKAN_SDK/Lib"
+    "$VULKAN_SDK/lib"
+    "$VULKAN_SDK/etc/vulkan/explicit_layer.d"
+    "$VULKAN_SDK/share/vulkan/explicit_layer.d"
+)
+layer_dirs=()
+for dir in "${layer_candidates[@]}"; do
+    if [[ -d "$dir" ]]; then
+        if compgen -G "$dir/*.json" >/dev/null 2>&1; then
+            layer_dirs+=("$dir")
+        fi
+    fi
+done
+if [[ "${#layer_dirs[@]}" -gt 0 ]]; then
+    layer_path="$(printf '%s\n' "${layer_dirs[@]}" | sort -u | paste -sd ':' -)"
+    export VK_LAYER_PATH="$layer_path"
+    note "Restricting Vulkan layer search to $VK_LAYER_PATH"
+fi
+
 build_dir="$repo_root/build"
 mkdir -p "$build_dir"
+cache_file="$build_dir/CMakeCache.txt"
 
 prefer_ninja=false
 if command -v ninja >/dev/null 2>&1; then
     prefer_ninja=true
-    note "Detected Ninja; using Ninja generator"
+    note "Detected Ninja"
 else
-    note "Ninja not found; falling back to CMake default generator"
+    note "Ninja not found; will use CMake default generator"
+fi
+
+existing_generator=""
+if [[ -f "$cache_file" ]]; then
+    existing_generator=$(grep '^CMAKE_GENERATOR:INTERNAL=' "$cache_file" | cut -d '=' -f 2-)
+    if [[ -n "$existing_generator" ]]; then
+        note "Existing build directory detected (generator: $existing_generator)"
+    fi
 fi
 
 configure_args=("-S" "$repo_root" "-B" "$build_dir")
-if "$prefer_ninja"; then
-    configure_args+=("-G" "Ninja" "-DCMAKE_BUILD_TYPE=Release")
+if [[ -n "$existing_generator" ]]; then
+    note "Reusing existing CMake generator"
 else
-    configure_args+=("-DCMAKE_BUILD_TYPE=Release")
+    if "$prefer_ninja"; then
+        note "Configuring with Ninja generator"
+        configure_args+=("-G" "Ninja")
+    else
+        note "Configuring with default generator"
+    fi
+    configure_args+=("-DCMAKE_BUILD_TYPE=Debug")
 fi
 
 heading "Configuring project"
 cmake "${configure_args[@]}"
 
+is_multi_config=false
+if [[ -f "$cache_file" ]]; then
+    if grep -q '^CMAKE_CONFIGURATION_TYPES' "$cache_file"; then
+        is_multi_config=true
+    fi
+fi
+
 build_args=("--build" "$build_dir")
-if ! "$prefer_ninja"; then
-    # default generators might be multi-config; try Release explicitly
-    build_args+=("--config" "Release")
+if "$is_multi_config"; then
+    build_args+=("--config" "Debug")
 fi
 
 heading "Building application"
@@ -110,8 +154,10 @@ cmake "${build_args[@]}"
 
 candidates=(
     "$build_dir/vulkan_triangle"
+    "$build_dir/Debug/vulkan_triangle"
     "$build_dir/Release/vulkan_triangle"
     "$build_dir/vulkan_triangle.exe"
+    "$build_dir/Debug/vulkan_triangle.exe"
     "$build_dir/Release/vulkan_triangle.exe"
 )
 
@@ -133,4 +179,5 @@ if [[ -z "$executable" ]]; then
 fi
 
 heading "Launching demo"
+note "Running $executable"
 "$executable"

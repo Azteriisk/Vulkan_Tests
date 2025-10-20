@@ -1,0 +1,42 @@
+Glossary of recurring Vulkan/GLFW terms
+- **VkInstance**: Top-level Vulkan handle that connects your app to the loader/driver. You must create it before interacting with any GPU objects.
+- **Physical device**: Represents an actual GPU. Queried via the instance and used to check supported features/queues.
+- **Logical device (`VkDevice`)**: Application-facing handle created from a physical device. You use it to create queues, buffers, pipelines, etc.
+- **Queue family / queue**: Vulkan commands execute on queues. Each queue belongs to a family that advertises capabilities (graphics, compute, transfer, presentation).
+- **Swapchain**: The rotating set of images presented to the window surface. Created with `VK_KHR_swapchain` and resized whenever the window changes size.
+- **Dynamic rendering**: A Vulkan 1.3 feature (`VK_KHR_dynamic_rendering`) that replaces the render pass/framebuffer objects with direct rendering calls via `vkCmdBeginRendering`.
+- **Semaphore vs Fence**: Semaphores synchronize queues (GPU-to-GPU), while fences synchronize GPU work with the CPU (app waits until the GPU signals the fence).
+- **SPIR-V**: Binary intermediate representation for Vulkan shaders compiled from GLSL/HLSL. `glslc` converts GLSL source to SPIR-V `.spv` files.
+- **GLFW**: A lightweight library that handles cross-platform window creation, input, and (optionally) Vulkan surface integration.
+
+File: main.cpp
+1-34: Includes GLFW/Vulkan headers plus standard utilities (math, filesystem, chrono). These headers expose the foundational types the app uses for window management, GPU communication, and linear algebra.
+38-43: Defines constants for the default window size, animation speed, and synchronization limits. `kMaxFramesInFlight` is `3`, matching the swapchain image count so we never reuse a GPU semaphore too early.
+45-49: `FocusWindow` is a tiny helper that just asks GLFW to focus the main window; this keeps keyboard shortcuts responsive when dialogs close.
+51-71: `GetEnvVar` safely reads environment variables on Windows, macOS, and Linux. It hides the platform-specific calls so later code can just ask for strings and not worry about memory ownership.
+74-82: `CheckVkResult` is shared with Dear ImGui's Vulkan backend. It catches Vulkan errors from ImGui calls and turns them into readable log messages before throwing if the error is fatal.
+84-92: Build-time switches enable validation layers only in debug builds. Validation layers are heavy-weight but essential during development.
+94-99: Lists the single validation layer (`VK_LAYER_KHRONOS_validation`) and the two device extensions this sample relies on (`VK_KHR_swapchain` for presenting to the window, `VK_KHR_dynamic_rendering` to render without legacy render-pass objects).
+101-117: `debugCallback` routes validation warnings to `std::cerr`. It explicitly filters out the third-party Rockstar loader warning so a missing Social Club layer file does not alarm new users.
+119-221: Utility structs and helper functions (`Vertex`, `QueueFamilyIndices`, `SwapChainSupportDetails`, `readFile`) translate between plain C++ structures and the layout descriptions Vulkan expects when feeding data to shaders.
+223-256: The `TriangleApp` class skeleton describes the full lifecycle. `run()` orchestrates window creation, Vulkan setup, the render loop, and cleanup; `initWindow()` wires GLFW callbacks so resize/interaction events reach the renderer; `initVulkan()` performs all Vulkan setup in dependency order.
+273-353: The constructor-like region (`cleanupSwapChain`, `cleanup`, `recreateSwapChain`) shows how the app tears down and rebuilds swapchain-dependent objects whenever the window changes. This keeps the renderer resilient to resizes and display changes.
+391-542: Member field declarations show what persistent objects the app keeps around: swapchain images, buffers, synchronization primitives, ImGui state, and per-frame CPU-side uniforms.
+569-618: `configureLoaderEnvironment()` sets environment variables that restrict Vulkan's layer search to the SDK directories. This prevents stray system-installed layers from interfering and is invoked before the instance is created.
+643-806: Instance and device creation (`createInstance`, `setupDebugMessenger`, `pickPhysicalDevice`, `createLogicalDevice`, `createSwapChain`) locate the GPU, select appropriate queues, and allocate swapchain images sized to the window.
+851-1049: Resource creation for image views, descriptor layouts, pipeline layout, graphics pipeline, and command pool. Notably, `createGraphicsPipeline` uses dynamic rendering, which skips traditional framebuffer setup and makes the code shorter for newcomers.
+1062-1417: Model and ImGui preparation. `loadModel` and the helper functions beneath it walk Assimp nodes, collect vertices/indices, and compute sizing so the mesh auto-centers. The ImGui functions build a descriptor pool, initialize the backends, and upload fonts.
+1450-1628: UI frame building in `buildImGuiFrame` and font upload routines. The code keeps the UI optional; if the user hides it, the rendering continues with only the mesh.
+1654-1757: Depth resource allocation and command buffer management. These sections show how depth images are created to match swapchain resolution and how command buffers are allocated per swapchain image for reuse.
+1758-1797: Synchronization objects (semaphores + fences) and uniform buffer updates. With three frames in flight, each frame has its own set of synchronization objects, so the CPU and GPU stay in lockstep without reusing resources too soon.
+1803-2007: `recordCommandBuffer` sets up the actual draw commands. It transitions images into the right layouts, binds pipelines and buffers, and asks ImGui to inject its draw data if the UI is visible.
+2016-2108: `drawFrame` is the heart of the render loop. It waits for the current frame's fence, acquires the next swapchain image, waits for any previous frame still using that image, records commands, submits work, and queues presentation. The per-image fence array (`imagesInFlight_`) ensures semaphores are never signaled while still in use.
+2119-2477: Helper queries (`isDeviceSuitable`, `findQueueFamilies`, `querySwapChainSupport`, etc.) plus buffer utilities and callbacks. These are the support routines that keep the main setup code readable.
+
+File: build.ps1
+95-118: After detecting the Vulkan SDK, the script forces the loader to ignore implicit layers and points `VK_LAYER_PATH` to the SDK's known JSON files. This mirrors the runtime behavior in `main.cpp` so Windows users see consistent validation output.
+120-198: Handles generator reuse, configuration, compilation, and executable discovery. It prints friendly notes so developers know which tools were detected and where the resulting binary lives before launching it automatically.
+
+File: build.sh
+53-71: Linux/macOS equivalent of the loader sandbox: sets `VK_LOADER_DISABLE_IMPLICIT_LAYERS` and builds `VK_LAYER_PATH` from SDK directories that actually contain layer JSON files. This keeps validation messages consistent across platforms.
+73-120: Mirrors the PowerShell script's behavior: verifying tools, configuring CMake, building, and finally running the executable so developers on Unix-like systems follow the same streamlined workflow.

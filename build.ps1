@@ -92,39 +92,81 @@ if (-not $glslcCmd) {
 
 Ensure-CommandExists -name 'glslc' -installHint 'glslc is part of the Vulkan SDK tools.' | Out-Null
 
+$env:VK_LOADER_DISABLE_IMPLICIT_LAYERS = '1'
+$candidateDirs = @(
+    (Join-Path $sdkPath 'Bin'),
+    (Join-Path $sdkPath 'bin'),
+    (Join-Path $sdkPath 'Lib'),
+    (Join-Path $sdkPath 'lib'),
+    (Join-Path (Join-Path (Join-Path $sdkPath 'etc') 'vulkan') 'explicit_layer.d'),
+    (Join-Path (Join-Path (Join-Path $sdkPath 'share') 'vulkan') 'explicit_layer.d')
+)
+
+$layerDirs = @()
+foreach ($dir in $candidateDirs) {
+    if (Test-Path $dir) {
+        $jsonFile = Get-ChildItem -Path $dir -Filter '*.json' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($jsonFile) {
+            $layerDirs += $dir
+        }
+    }
+}
+
+if ($layerDirs.Count -gt 0) {
+    $pathSep = $IsWindows ? ';' : ':'
+    $env:VK_LAYER_PATH = ($layerDirs | Select-Object -Unique) -join $pathSep
+    Write-Note "Restricting Vulkan layer search to $($env:VK_LAYER_PATH)"
+}
+
 $buildDir = Join-Path $repoRoot 'build'
 if (-not (Test-Path $buildDir)) {
     New-Item -ItemType Directory -Path $buildDir | Out-Null
 }
+$cacheFile = Join-Path $buildDir 'CMakeCache.txt'
 
 $preferNinja = $false
 try {
     $ninjaPath = Get-Command ninja -ErrorAction Stop
     $preferNinja = $true
-    Write-Note "Detected Ninja at $($ninjaPath.Path); using Ninja generator"
+    Write-Note "Detected Ninja at $($ninjaPath.Path)"
 } catch {
-    Write-Note "Ninja not found; falling back to CMake default generator"
+    Write-Note "Ninja not found; will use CMake default generator"
+}
+
+$existingGenerator = $null
+if (Test-Path $cacheFile) {
+    $generatorMatch = Select-String -Path $cacheFile -Pattern '^CMAKE_GENERATOR:INTERNAL=(.+)$'
+    if ($generatorMatch) {
+        $existingGenerator = $generatorMatch.Matches[0].Groups[1].Value.Trim()
+        Write-Note "Existing build directory detected (generator: $existingGenerator)"
+    }
 }
 
 $configureArgs = @('-S', $repoRoot, '-B', $buildDir)
-if ($preferNinja) {
-    $configureArgs += @('-G', 'Ninja')
+if ($existingGenerator) {
+    Write-Note "Reusing existing CMake generator"
 } else {
-    $configureArgs += '-DCMAKE_BUILD_TYPE=Release'
+    if ($preferNinja) {
+        Write-Note "Configuring with Ninja generator"
+        $configureArgs += @('-G', 'Ninja')
+        $configureArgs += '-DCMAKE_BUILD_TYPE=Debug'
+    } else {
+        Write-Note "Configuring with default generator (Debug)"
+        $configureArgs += '-DCMAKE_BUILD_TYPE=Debug'
+    }
 }
 
 Write-Heading "Configuring project"
 & cmake @configureArgs
 
-$cacheFile = Join-Path $buildDir 'CMakeCache.txt'
 $isMultiConfig = $false
 if (Test-Path $cacheFile) {
     $isMultiConfig = Select-String -Path $cacheFile -Pattern '^CMAKE_CONFIGURATION_TYPES' -Quiet
 }
 
 $buildArgs = @('--build', $buildDir)
-if (-not $preferNinja -and $isMultiConfig) {
-    $buildArgs += @('--config', 'Release')
+if ($isMultiConfig) {
+    $buildArgs += @('--config', 'Debug')
 }
 
 Write-Heading "Building application"
@@ -133,6 +175,8 @@ Write-Heading "Building application"
 $exeCandidates = @(
     (Join-Path $buildDir 'vulkan_triangle.exe'),
     (Join-Path $buildDir 'vulkan_triangle'),
+    (Join-Path $buildDir 'Debug/vulkan_triangle.exe'),
+    (Join-Path $buildDir 'Debug/vulkan_triangle'),
     (Join-Path $buildDir 'Release/vulkan_triangle.exe'),
     (Join-Path $buildDir 'Release/vulkan_triangle')
 )
@@ -150,4 +194,5 @@ if (-not $executable) {
 }
 
 Write-Heading "Launching demo"
+Write-Note "Running $executable"
 & $executable
